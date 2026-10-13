@@ -1,0 +1,205 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlateVision AI | ANPR</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav>
+  <a class="brand" href="/">◈ PlateVision <span>AI</span></a>
+  <div><a href="/">Dashboard</a><a href="/history">History</a>
+  <a href="/districts">UP RTO</a></div>
+</nav>
+
+<main class="container">
+<section class="hero">
+  <div>
+    <p class="eyebrow">AI • MACHINE LEARNING • COMPUTER VISION</p>
+    <h1>Vehicle Plate<br><span>Recognition System</span></h1>
+    <p>Detect vehicle registration plates using computer vision and OCR.
+       Analyze images, videos and live webcam frames.</p>
+    <a class="btn" href="#upload">Start Detection →</a>
+  </div>
+  <div class="plate-card">
+    <small>INDIA • NUMBER PLATE</small>
+    <h2>UP 65 AB 1234</h2>
+    <p>ANPR SYSTEM</p>
+  </div>
+</section>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for category, message in messages %}
+<div class="notice">{{ message }}</div>
+{% endfor %}
+{% endwith %}
+
+<section class="stats">
+  <div class="panel"><small>Total detections</small><h2>{{ total }}</h2></div>
+  <div class="panel"><small>Unique plate texts</small><h2>{{ unique }}</h2></div>
+  <div class="panel"><small>Technology</small><h2>CV + OCR</h2></div>
+</section>
+
+<section class="columns">
+<div class="panel" id="upload">
+  <p class="eyebrow">01 / MEDIA ANALYSIS</p>
+  <h2>Upload Photo or Video</h2>
+  <form action="/analyze" method="post" enctype="multipart/form-data">
+    <label class="dropzone">
+      <strong>Choose your file</strong>
+      <p>JPG, PNG, WEBP, BMP, MP4, AVI, MOV, MKV</p>
+      <input type="file" name="file" accept="image/*,video/*" required>
+    </label>
+    <button class="btn full" type="submit">Analyze Media</button>
+  </form>
+</div>
+
+<div class="panel">
+  <p class="eyebrow">02 / LIVE DETECTION</p>
+  <h2>Live Camera Scanner</h2>
+  <div class="camera">
+    <video id="camera" autoplay muted playsinline></video>
+    <img id="processed" alt="Processed camera frame">
+    <p id="placeholder">Camera preview will appear here</p>
+  </div>
+  <div class="actions">
+    <button class="btn" id="start">Start Camera</button>
+    <button class="btn secondary" id="stop" disabled>Stop</button>
+  </div>
+  <p id="status" class="muted">Allow camera permission when asked.</p>
+  <div id="liveResults"></div>
+</div>
+</section>
+
+<section class="panel">
+  <div class="section-heading">
+    <h2>Recent Detection History</h2>
+    <a href="/history">View all →</a>
+  </div>
+  {% if recent %}
+  <div class="table-wrap"><table>
+    <tr><th>Plate</th><th>RTO</th><th>District</th>
+    <th>Confidence</th><th>Time</th></tr>
+    {% for r in recent %}
+    <tr>
+      <td class="plate">{{ r.plate }}</td>
+      <td>{{ r.rto_code or '—' }}</td>
+      <td>{{ r.district }}</td>
+      <td>{{ "%.0f"|format((r.confidence or 0)*100) }}%</td>
+      <td>{{ r.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">No detections yet. Upload a file or start the camera.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>About this project</h2>
+  <p class="muted">This educational ANPR prototype uses OpenCV to find
+  possible plate regions and EasyOCR to read text. Results can be
+  incorrect. It does not access official vehicle-owner records.</p>
+</section>
+</main>
+
+<footer>PlateVision AI · Educational ANPR Project</footer>
+
+<script>
+const video = document.getElementById("camera");
+const processed = document.getElementById("processed");
+const placeholder = document.getElementById("placeholder");
+const statusText = document.getElementById("status");
+const liveResults = document.getElementById("liveResults");
+
+let stream = null, timer = null, busy = false;
+
+document.getElementById("start").onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode: "environment"}, audio: false
+    });
+    video.srcObject = stream;
+    video.style.display = "block";
+    processed.style.display = "none";
+    placeholder.style.display = "none";
+    document.getElementById("start").disabled = true;
+    document.getElementById("stop").disabled = false;
+    statusText.textContent = "Live camera is running.";
+    timer = setInterval(scanFrame, 2000);
+  } catch (e) {
+    statusText.textContent =
+      "Camera error: " + e.message +
+      ". Use localhost and allow camera permission.";
+  }
+};
+
+document.getElementById("stop").onclick = () => {
+  clearInterval(timer);
+  timer = null;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  video.srcObject = null;
+  video.style.display = "none";
+  processed.style.display = "none";
+  placeholder.style.display = "block";
+  document.getElementById("start").disabled = false;
+  document.getElementById("stop").disabled = true;
+  statusText.textContent = "Camera stopped.";
+};
+
+async function scanFrame() {
+  if (busy || !video.videoWidth) return;
+  busy = true;
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = Math.round(
+      640 * video.videoHeight / video.videoWidth
+    );
+    canvas.getContext("2d").drawImage(
+      video, 0, 0, canvas.width, canvas.height
+    );
+    const blob = await new Promise(resolve =>
+      canvas.toBlob(resolve, "image/jpeg", 0.75)
+    );
+    const form = new FormData();
+    form.append("frame", blob, "camera.jpg");
+
+    const response = await fetch("/api/live_frame", {
+      method: "POST", body: form
+    });
+    const data = await response.json();
+
+    if (data.image) {
+      processed.src = data.image;
+      processed.style.display = "block";
+    }
+
+    liveResults.replaceChildren();
+    for (const d of (data.detections || [])) {
+      const item = document.createElement("div");
+      item.className = "live-item";
+      const strong = document.createElement("strong");
+      strong.textContent = d.plate;
+      const detail = document.createElement("span");
+      detail.textContent = (d.rto_code || "RTO unknown") +
+        " · " + d.district;
+      item.append(strong, detail);
+      liveResults.appendChild(item);
+    }
+  } catch (e) {
+    statusText.textContent = "Frame processing error: " + e.message;
+  } finally {
+    busy = false;
+  }
+}
+
+window.addEventListener("beforeunload", () => {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+});
+</script>
+</body>
+</html>
