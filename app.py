@@ -1,9 +1,20 @@
-import os, re, cv2, sqlite3, secrets, time
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+import re, cv2, sqlite3, secrets, time, gc
 from datetime import datetime
 from pathlib import Path
 import numpy as np
 from flask import Flask, request, render_template, redirect, url_for, flash, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
+
+try:
+    import torch
+    torch.set_num_threads(1)
+except Exception:
+    pass
 
 try:
     import easyocr
@@ -25,7 +36,6 @@ ALLOWED_VIDEOS = {"mp4", "avi", "mov", "mkv", "webm"}
 _reader = None
 
 # UP district list plus commonly used registration prefixes.
-# Prefix assignments can change; confirm official jurisdiction before operational use.
 UP_RTO = {
     "UP11": "Saharanpur", "UP12": "Muzaffarnagar", "UP13": "Bulandshahr",
     "UP14": "Ghaziabad", "UP15": "Meerut", "UP16": "Gautam Buddha Nagar (Noida)",
@@ -47,7 +57,8 @@ UP_RTO = {
     "UP82": "Etah", "UP83": "Firozabad", "UP84": "Mainpuri", "UP85": "Mathura",
     "UP86": "Hathras", "UP87": "Kasganj", "UP90": "Banda", "UP91": "Hamirpur",
     "UP92": "Jalaun", "UP93": "Jhansi", "UP94": "Lalitpur", "UP95": "Mahoba",
-    "UP96": "Chitrakoot", }
+    "UP96": "Chitrakoot",
+}
 UP_DISTRICTS = [
 "Agra","Aligarh","Ambedkar Nagar","Amethi","Amroha","Auraiya","Ayodhya","Azamgarh",
 "Baghpat","Bahraich","Ballia","Balrampur","Banda","Barabanki","Bareilly","Basti",
@@ -82,11 +93,13 @@ def init_db():
 def get_reader():
     global _reader
     if _reader is None and easyocr is not None:
-        _reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        try:
+            _reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        except Exception:
+            _reader = None
     return _reader
 
 def plate_region_candidates(image):
-    """Heuristic CV candidate finder. It is a fallback, not a trained plate detector."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray = cv2.bilateralFilter(gray, 11, 17, 17)
     edges = cv2.Canny(gray, 40, 160)
@@ -95,7 +108,7 @@ def plate_region_candidates(image):
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     h, w = gray.shape[:2]
     candidates = []
-    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:120]:
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:80]:
         x, y, bw, bh = cv2.boundingRect(c)
         if bh < 12 or bw < 45:
             continue
@@ -103,13 +116,12 @@ def plate_region_candidates(image):
         area_ratio = (bw * bh) / max(w * h, 1)
         if 2.0 <= ratio <= 6.8 and 0.0005 <= area_ratio <= 0.12:
             candidates.append((x, y, bw, bh))
-        if len(candidates) >= 12:
+        if len(candidates) >= 8:
             break
     return candidates
 
 def clean_plate(text):
     text = re.sub(r"[^A-Z0-9]", "", (text or "").upper())
-    # Keep plausible Indian registration formats; OCR may still produce partial text.
     return text[:15]
 
 def identify_rto(plate):
@@ -124,9 +136,14 @@ def recognize_crop(crop):
     reader = get_reader()
     if reader is None or crop.size == 0:
         return "", 0.0
-    enlarged = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY) if len(enlarged.shape) == 3 else enlarged
     try:
+        ch, cw = crop.shape[:2]
+        if max(ch, cw) > 300:
+            scale = 300 / float(max(ch, cw))
+            crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)), interpolation=cv2.INTER_AREA)
+        
+        enlarged = cv2.resize(crop, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY) if len(enlarged.shape) == 3 else enlarged
         results = reader.readtext(gray, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
         if not results:
             return "", 0.0
@@ -138,6 +155,12 @@ def recognize_crop(crop):
 def process_frame(image, source="upload", save=True):
     if image is None or image.size == 0:
         return image, []
+    
+    ih, iw = image.shape[:2]
+    if max(ih, iw) > 800:
+        scale = 800 / float(max(ih, iw))
+        image = cv2.resize(image, (int(iw * scale), int(ih * scale)), interpolation=cv2.INTER_AREA)
+
     annotated = image.copy()
     candidates = plate_region_candidates(image)
     detections = []
@@ -149,7 +172,6 @@ def process_frame(image, source="upload", save=True):
         text, conf = recognize_crop(crop)
         if len(text) < 5:
             continue
-        # Deduplicate same OCR output within one frame.
         if any(d["plate"] == text for d in detections):
             continue
         code, district = identify_rto(text)
@@ -157,16 +179,21 @@ def process_frame(image, source="upload", save=True):
         label = text if text else "Plate candidate"
         cv2.putText(annotated, label, (x1, max(22,y1-8)), cv2.FONT_HERSHEY_SIMPLEX, .65, (30,220,120), 2)
         detections.append({"plate": text, "confidence": round(conf, 3), "rto_code": code,
-                           "district": district, "bbox": [x1,y1,x2,y2]})
+                            "district": district, "bbox": [x1,y1,x2,y2]})
         if save:
             crop_name = f"plate_{int(time.time()*1000)}_{secrets.token_hex(3)}.jpg"
             crop_path = RESULT_DIR / crop_name
             cv2.imwrite(str(crop_path), crop)
-            with db() as con:
-                con.execute("""INSERT INTO detections(plate,rto_code,district,confidence,source,image_path,created_at)
-                    VALUES(?,?,?,?,?,?,?)""",
-                    (text, code, district, float(conf), source, f"results/{crop_name}",
-                     datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            try:
+                with db() as con:
+                    con.execute("""INSERT INTO detections(plate,rto_code,district,confidence,source,image_path,created_at)
+                        VALUES(?,?,?,?,?,?,?)""",
+                        (text, code, district, float(conf), source, f"results/{crop_name}",
+                         datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            except Exception:
+                pass
+    
+    gc.collect()
     return annotated, detections
 
 def allowed(filename, kinds):
@@ -174,10 +201,13 @@ def allowed(filename, kinds):
 
 @app.route("/")
 def index():
-    with db() as con:
-        total = con.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
-        unique = con.execute("SELECT COUNT(DISTINCT plate) FROM detections").fetchone()[0]
-        recent = con.execute("SELECT * FROM detections ORDER BY id DESC LIMIT 6").fetchall()
+    try:
+        with db() as con:
+            total = con.execute("SELECT COUNT(*) FROM detections").fetchone()[0]
+            unique = con.execute("SELECT COUNT(DISTINCT plate) FROM detections").fetchone()[0]
+            recent = con.execute("SELECT * FROM detections ORDER BY id DESC LIMIT 6").fetchall()
+    except Exception:
+        total, unique, recent = 0, 0, []
     return render_template("index.html", total=total, unique=unique, recent=recent, districts=UP_DISTRICTS)
 
 @app.route("/analyze", methods=["POST"])
@@ -196,45 +226,60 @@ def analyze():
     f.save(path)
     all_detections = []
     result_url = None
-    if ext in ALLOWED_IMAGES:
-        image = cv2.imread(str(path))
-        if image is None:
-            flash("Image read nahi ho paayi.", "error")
-            return redirect(url_for("index"))
-        annotated, all_detections = process_frame(image, source="image upload")
-        out_name = "annotated_" + secrets.token_hex(5) + ".jpg"
-        cv2.imwrite(str(RESULT_DIR / out_name), annotated)
-        result_url = url_for("static", filename=f"results/{out_name}")
-    else:
-        cap = cv2.VideoCapture(str(path))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
-        out_name = "video_" + secrets.token_hex(5) + ".mp4"
-        out_path = RESULT_DIR / out_name
-        writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), min(fps, 20), (width, height))
-        frame_idx = 0
-        seen = set()
-        while cap.isOpened():
-            ok, frame = cap.read()
-            if not ok:
-                break
-            # Process up to ~2 frames/sec to keep long clips manageable.
-            if frame_idx % max(1, int(fps/2)) == 0:
-                annotated, dets = process_frame(frame, source="video upload")
-                for d in dets:
-                    if d["plate"] not in seen:
-                        seen.add(d["plate"])
-                        all_detections.append(d)
-            else:
-                annotated = frame
-            writer.write(annotated)
-            frame_idx += 1
-        cap.release()
-        writer.release()
-        result_url = url_for("static", filename=f"results/{out_name}")
-        if not all_detections:
-            flash("Video process ho gaya, lekin readable plate detect nahi hui.", "warning")
+    try:
+        if ext in ALLOWED_IMAGES:
+            image = cv2.imread(str(path))
+            if image is None:
+                flash("Image read nahi ho paayi.", "error")
+                return redirect(url_for("index"))
+            annotated, all_detections = process_frame(image, source="image upload")
+            out_name = "annotated_" + secrets.token_hex(5) + ".jpg"
+            cv2.imwrite(str(RESULT_DIR / out_name), annotated)
+            result_url = url_for("static", filename=f"results/{out_name}")
+        else:
+            cap = cv2.VideoCapture(str(path))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
+            
+            if width > 640:
+                scale = 640 / float(width)
+                width = 640
+                height = int(height * scale)
+
+            out_name = "video_" + secrets.token_hex(5) + ".mp4"
+            out_path = RESULT_DIR / out_name
+            writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), min(fps, 15), (width, height))
+            frame_idx = 0
+            seen = set()
+            while cap.isOpened() and frame_idx < 150:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if width != int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640):
+                    frame = cv2.resize(frame, (width, height))
+                
+                if frame_idx % max(1, int(fps/2)) == 0:
+                    annotated, dets = process_frame(frame, source="video upload")
+                    for d in dets:
+                        if d["plate"] not in seen:
+                            seen.add(d["plate"])
+                            all_detections.append(d)
+                else:
+                    annotated = frame
+                writer.write(annotated)
+                frame_idx += 1
+            cap.release()
+            writer.release()
+            result_url = url_for("static", filename=f"results/{out_name}")
+            if not all_detections:
+                flash("Video process ho gaya, lekin readable plate detect nahi hui.", "warning")
+    except Exception:
+        flash("Processing ke dauran error aa gaya.", "error")
+        return redirect(url_for("index"))
+    finally:
+        gc.collect()
+
     return render_template("result.html", detections=all_detections, result_url=result_url, filename=name)
 
 @app.route("/api/live_frame", methods=["POST"])
@@ -246,7 +291,6 @@ def live_frame():
     image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
     if image is None:
         return jsonify({"error":"Invalid frame"}), 400
-    # Live snapshots are logged only when OCR returns a plausible plate.
     annotated, detections = process_frame(image, source="live webcam")
     ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
     import base64
@@ -256,12 +300,15 @@ def live_frame():
 @app.route("/history")
 def history():
     q = request.args.get("q", "").strip().upper()
-    with db() as con:
-        if q:
-            rows = con.execute("SELECT * FROM detections WHERE plate LIKE ? OR district LIKE ? ORDER BY id DESC LIMIT 500",
-                               (f"%{q}%", f"%{q}%")).fetchall()
-        else:
-            rows = con.execute("SELECT * FROM detections ORDER BY id DESC LIMIT 500").fetchall()
+    try:
+        with db() as con:
+            if q:
+                rows = con.execute("SELECT * FROM detections WHERE plate LIKE ? OR district LIKE ? ORDER BY id DESC LIMIT 500",
+                                   (f"%{q}%", f"%{q}%")).fetchall()
+            else:
+                rows = con.execute("SELECT * FROM detections ORDER BY id DESC LIMIT 500").fetchall()
+    except Exception:
+        rows = []
     return render_template("history.html", rows=rows, q=q)
 
 @app.route("/districts")
