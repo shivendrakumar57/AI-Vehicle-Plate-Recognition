@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: platevision-anpr
+    runtime: python
+    buildCommand: pip install -r requirements.txt gunicorn
+    startCommand: gunicorn app:app
