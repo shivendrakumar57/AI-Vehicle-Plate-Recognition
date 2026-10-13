@@ -1,0 +1,52 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detection Results</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav><a class="brand" href="/">◈ PlateVision <span>AI</span></a>
+<div><a href="/">Dashboard</a><a href="/history">History</a>
+<a href="/districts">UP RTO</a></div></nav>
+
+<main class="container">
+<section class="panel">
+<p class="eyebrow">ANALYSIS COMPLETE</p>
+<h1>Detection Results</h1>
+<p class="muted">File: {{ filename }}</p>
+
+{% if result_url.endswith('.mp4') %}
+<video class="result-media" controls src="{{ result_url }}"></video>
+{% else %}
+<img class="result-media" src="{{ result_url }}" alt="Annotated image">
+{% endif %}
+</section>
+
+<section class="panel">
+<h2>Recognized Number Plates</h2>
+{% if detections %}
+<div class="table-wrap"><table>
+<tr><th>Plate</th><th>RTO Code</th><th>District</th><th>Confidence</th></tr>
+{% for d in detections %}
+<tr>
+<td class="plate">{{ d.plate }}</td>
+<td>{{ d.rto_code or '—' }}</td>
+<td>{{ d.district }}</td>
+<td>{{ "%.0f"|format(d.confidence*100) }}%</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No readable plate found. Try a clearer image or video.</p>
+{% endif %}
+<p class="muted">OCR confidence is not a guarantee of correct recognition.</p>
+<a class="btn" href="/">Analyze another file</a>
+<a class="btn secondary" href="/history">Open History</a>
+</section>
+</main>
+<footer>PlateVision AI</footer>
+</body>
+</html>
