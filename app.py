@@ -325,7 +325,10 @@ def too_large(_):
     return redirect(url_for("index"))
 
 init_db()
-
-if __name__ == "__main__":
-    print("ANPR running at http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5000)), debug=False)
+# Server start hote hi model load kar lo taaki request ke waqt timeout na ho
+try:
+    print("Pre-loading EasyOCR reader...")
+    get_reader()
+    print("EasyOCR loaded successfully!")
+except Exception as e:
+    print("Error loading EasyOCR on startup:", e)
