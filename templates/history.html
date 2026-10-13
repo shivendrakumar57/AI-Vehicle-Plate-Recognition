@@ -1,0 +1,50 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detection History</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav><a class="brand" href="/">◈ PlateVision <span>AI</span></a>
+<div><a href="/">Dashboard</a><a href="/history">History</a>
+<a href="/districts">UP RTO</a></div></nav>
+
+<main class="container">
+<section class="panel">
+<p class="eyebrow">SQLITE DATABASE</p>
+<h1>Detection History</h1>
+<p class="muted">Search previously recognized plate text or district.</p>
+
+<form method="get" class="searchbar">
+<input name="q" value="{{ q }}" placeholder="Search plate or district">
+<button class="btn">Search</button>
+<a class="btn secondary" href="/history">Clear</a>
+</form>
+
+{% if rows %}
+<div class="table-wrap"><table>
+<tr><th>ID</th><th>Plate</th><th>RTO</th><th>District</th>
+<th>Confidence</th><th>Source</th><th>Date / Time</th></tr>
+{% for r in rows %}
+<tr>
+<td>{{ r.id }}</td>
+<td class="plate">{{ r.plate }}</td>
+<td>{{ r.rto_code or '—' }}</td>
+<td>{{ r.district }}</td>
+<td>{{ "%.0f"|format((r.confidence or 0)*100) }}%</td>
+<td>{{ r.source }}</td>
+<td>{{ r.created_at }}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No history entries found.</p>
+{% endif %}
+</section>
+</main>
+<footer>PlateVision AI · Local detection history</footer>
+</body>
+</html>
