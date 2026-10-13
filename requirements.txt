@@ -1,6 +1,6 @@
 Flask>=3.0,<4.0
-opencv-python>=4.9
-numpy>=1.26
+opencv-python-headless>=4.9.0
+numpy>=1.26.0
 easyocr>=1.7.1
-Pillow>=10.0
+Pillow>=10.0.0
 gunicorn
