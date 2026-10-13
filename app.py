@@ -35,7 +35,6 @@ ALLOWED_IMAGES = {"jpg", "jpeg", "png", "webp", "bmp"}
 ALLOWED_VIDEOS = {"mp4", "avi", "mov", "mkv", "webm"}
 _reader = None
 
-# UP district list plus commonly used registration prefixes.
 UP_RTO = {
     "UP11": "Saharanpur", "UP12": "Muzaffarnagar", "UP13": "Bulandshahr",
     "UP14": "Ghaziabad", "UP15": "Meerut", "UP16": "Gautam Buddha Nagar (Noida)",
@@ -108,7 +107,7 @@ def plate_region_candidates(image):
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     h, w = gray.shape[:2]
     candidates = []
-    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:80]:
+    for c in sorted(contours, key=cv2.contourArea, reverse=True)[:60]:
         x, y, bw, bh = cv2.boundingRect(c)
         if bh < 12 or bw < 45:
             continue
@@ -116,7 +115,7 @@ def plate_region_candidates(image):
         area_ratio = (bw * bh) / max(w * h, 1)
         if 2.0 <= ratio <= 6.8 and 0.0005 <= area_ratio <= 0.12:
             candidates.append((x, y, bw, bh))
-        if len(candidates) >= 8:
+        if len(candidates) >= 6:
             break
     return candidates
 
@@ -196,9 +195,6 @@ def process_frame(image, source="upload", save=True):
     gc.collect()
     return annotated, detections
 
-def allowed(filename, kinds):
-    return "." in filename and filename.rsplit(".",1)[1].lower() in kinds
-
 @app.route("/")
 def index():
     try:
@@ -252,7 +248,7 @@ def analyze():
             writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), min(fps, 15), (width, height))
             frame_idx = 0
             seen = set()
-            while cap.isOpened() and frame_idx < 150:
+            while cap.isOpened() and frame_idx < 120:
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -325,10 +321,7 @@ def too_large(_):
     return redirect(url_for("index"))
 
 init_db()
-# Server start hote hi model load kar lo taaki request ke waqt timeout na ho
-try:
-    print("Pre-loading EasyOCR reader...")
-    get_reader()
-    print("EasyOCR loaded successfully!")
-except Exception as e:
-    print("Error loading EasyOCR on startup:", e)
+
+if __name__ == "__main__":
+    print("ANPR running at http://127.0.0.1:5000")
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5000)), debug=False)
