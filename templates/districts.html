@@ -1,0 +1,44 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UP RTO Directory</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav><a class="brand" href="/">◈ PlateVision <span>AI</span></a>
+<div><a href="/">Dashboard</a><a href="/history">History</a>
+<a href="/districts">UP RTO</a></div></nav>
+
+<main class="container">
+<section class="panel">
+<p class="eyebrow">REGISTRATION REFERENCE</p>
+<h1>Uttar Pradesh RTO Codes</h1>
+<p class="muted">Common UP registration prefixes and their reference
+districts. Confirm current office assignments with official transport
+records before relying on them.</p>
+<div class="table-wrap"><table>
+<tr><th>Registration Code</th><th>District / Office Reference</th></tr>
+{% for code, name in mapping %}
+<tr><td class="plate">{{ code }}</td><td>{{ name }}</td></tr>
+{% endfor %}
+</table></div>
+</section>
+
+<section class="panel">
+<h2>Uttar Pradesh District List</h2>
+<div class="district-grid">
+{% for district in districts %}
+<div class="district-pill">{{ district }}</div>
+{% endfor %}
+</div>
+<p class="muted">A district is not necessarily the same as an RTO
+jurisdiction. This is a reference list, not an official verification
+service.</p>
+</section>
+</main>
+<footer>PlateVision AI</footer>
+</body>
+</html>
